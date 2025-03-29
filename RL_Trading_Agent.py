@@ -60,8 +60,13 @@ env = TradingEnv(data)
 obs = env.reset()
 done = False
 
+print("Initial net worth:", env.net_worth)
 while not done:
     action = env.action_space.sample()
     obs, reward, done, _ = env.step(action)
-    print(f"Observation: {obs}, Reward: {reward}, Done: {done}")
+    # print(f"Observation: {obs}, Reward: {reward}, Done: {done}")
+
+print("Final net worth:", env.net_worth)
+print("Total profit/loss:", env.net_worth - env.initial_balance)
+print("Total shares held:", env.shares_held)
 

@@ -7,18 +7,18 @@ import yfinance as yf
 class TradingEnv(gym.Env):
     def __init__(self, data, initial_balance=10000):
         super(TradingEnv, self).__init__()
-        self.data = data.reset_index()  # Reset index to avoid issues with step indexing
+        self.data = data.reset_index()
         self.initial_balance = initial_balance
         self.current_step = 0
         self.balance = initial_balance
         self.shares_held = 0
-        self.total_profit = 0
         self.net_worth = initial_balance
         self.prev_net_worth = initial_balance
-        self.buy_price = 0  # Track the price at which shares were bought
+        self.buy_price = 0
+        self.transaction_fee = 0.001  # 0.1% per trade
 
         # Define action and observation space
-        self.action_space = spaces.Discrete(3) #0: Hold, 1: Buy, 2: Sell
+        self.action_space = spaces.Discrete(3)  # 0: Hold, 1: Buy, 2: Sell
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(5,), dtype=np.float32)
 
     def reset(self):
@@ -27,15 +27,14 @@ class TradingEnv(gym.Env):
         self.shares_held = 0
         self.net_worth = self.initial_balance
         self.prev_net_worth = self.initial_balance
-        self.buy_price = 0  # Reset the buy price
+        self.buy_price = 0
         return self._next_observation()
-        
+
     def _next_observation(self):
         obs = self.data.iloc[self.current_step][['Open', 'High', 'Low', 'Close', 'Volume']].values
         return obs.astype(np.float32)
-        
-    def step(self, action):
 
+    def step(self, action):
         if self.current_step >= len(self.data) - 1:
             return self._next_observation(), 0, True, {}
 
@@ -43,49 +42,50 @@ class TradingEnv(gym.Env):
         self.prev_net_worth = self.net_worth
         reward = 0
 
-        if action == 1 and self.balance >= current_price: # Buy
+        if action == 1 and self.balance >= current_price:  # Buy
             num_shares = self.balance // current_price
-            self.balance -= num_shares * current_price
-            self.shares_held += num_shares
-            self.buy_price = current_price  # Set the buy price to the current price
-            reward -= 0.001*(num_shares * current_price)  # Penalty for buying (0.1% of the transaction)
+            cost = num_shares * current_price
+            fee = cost * self.transaction_fee
+            if num_shares > 0:
+                self.balance -= (cost + fee)
+                self.shares_held += num_shares
+                self.buy_price = ((self.buy_price * (self.shares_held - num_shares)) + (num_shares * current_price)) / self.shares_held
+                reward -= fee  # Small penalty for trading
 
-        elif action == 2 and self.shares_held > 0: # Sell
+        elif action == 2 and self.shares_held > 0:  # Sell
             sale_value = self.shares_held * current_price
-            self.balance += sale_value
-            reward += sale_value - (self.shares_held * self.buy_price)
+            fee = sale_value * self.transaction_fee
+            profit = (current_price - self.buy_price) * self.shares_held  # Profit from the trade
+            self.balance += (sale_value - fee)
             self.shares_held = 0
-            reward -= 0.001 * sale_value
+            self.buy_price = 0
+            reward += profit - fee  # Reward is profit minus fees
 
         self.net_worth = self.balance + (self.shares_held * current_price)
-        reward += self.net_worth - self.prev_net_worth  # Reward based on net worth change
+        reward += (self.net_worth - self.prev_net_worth) * 0.01  # Reward based on percentage change
 
-        if action == 0: # Small penalty for holding
-            reward -= 0.05
+        if action == 0:  # Small penalty for inactivity
+            reward -= 0.02
 
-        price_window = self.data.iloc[max(0, self.current_step-5):self.current_step+1]['Close']
-        volatility = np.std(price_window, axis=0)  # Calculate volatility over the last 5 prices
-        reward -= 0.1 * volatility
-
-        self.prev_net_worth = self.net_worth
         self.current_step += 1
-
         done = self.current_step >= len(self.data) - 1
         return self._next_observation(), reward, done, {}
-        
-        
+
+# Fetch AAPL stock data
 data = yf.download('AAPL', start='2023-01-01', end='2023-12-31', interval='1d')
 env = TradingEnv(data)
 
 obs = env.reset()
 done = False
 
-print("Initial Net Worth:", env.net_worth)
+print("Initial net worth:", env.net_worth)
 while not done:
-    action = env.action_space.sample()
+    action = env.action_space.sample()  # Random action for now
     obs, reward, done, _ = env.step(action)
     # print(f"Observation: {obs}, Reward: {reward}, Done: {done}")
 
-print("Final Net Worth:", env.net_worth)
-print("Total Profit/Loss:", env.net_worth - env.initial_balance)
-print("Total Shares Held:", env.shares_held)
+print("Final net worth:", env.net_worth)
+print("Total profit/loss:", env.net_worth - env.initial_balance)
+print("Total shares held:", env.shares_held)
+# Note: The final net worth and total profit/loss will depend on the random actions taken.
+
