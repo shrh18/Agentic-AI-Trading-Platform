@@ -29,7 +29,7 @@ class TradingEnv(gym.Env):
             self.action_space = spaces.Discrete(3)  # 0: Hold, 1: Buy, 2: Sell
 
         # Observation space (Stock indicators: Open, High, Low, Close, Volume)
-        self.observation_space = gym.spaces.Box(low=-1e6, high=1e6, shape=(5,), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-1e6, high=1e6, shape=(8,), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -45,7 +45,8 @@ class TradingEnv(gym.Env):
         obs = self.data.iloc[self.current_step][['Open', 'High', 'Low', 'Close', 'Volume']].values.astype(np.float32)
         obs[:4] /= 1000
         obs[4] = np.clip(obs[4] / 1e6, -1e6, 1e6)  # Normalize volume to be within a reasonable range
-        return obs
+        account_state = np.array([self.balance/10000, self.shares_held/100, self.net_worth/10000], dtype=np.float32)
+        return np.concatenate((obs, account_state))
 
     def step(self, action):
         if self.current_step >= len(self.data) - 1:
@@ -96,10 +97,10 @@ class TradingEnv(gym.Env):
                 reward += profit - fee
 
         self.net_worth = self.balance + (self.shares_held * current_price)
-        reward += (self.net_worth - self.prev_net_worth) * 0.01
+        reward += (self.net_worth - self.prev_net_worth) / self.prev_net_worth
 
         if action == 0:
-            reward -= 0.02  # Small penalty for inactivity
+            reward -= 0.1  # Small penalty for inactivity
 
         self.current_step += 1
         done = self.current_step >= len(self.data) - 1
@@ -107,10 +108,12 @@ class TradingEnv(gym.Env):
         return self._next_observation(), reward, done, truncated, {}
 
     def render(self):
-        print(f"Step: {self.current_step}, Balance: {self.balance}, Shares Held: {self.shares_held}, Net Worth: {self.net_worth}")
+        if self.current_step % 100 == 0:
+            print(f"Step: {self.current_step}, Balance: {self.balance}, Shares Held: {self.shares_held}, Net Worth: {self.net_worth}")
 
 # Fetch AAPL stock data
-data = yf.download('AAPL', start='2023-01-01', end='2023-12-31', interval='1d')
+# data = yf.download('AAPL', start='2023-01-01', end='2023-12-31', interval='1d')
+data = yf.download('TSLA', start='2024-01-01', end='2024-12-31', interval='1h')
 
 
 
@@ -118,17 +121,17 @@ data = yf.download('AAPL', start='2023-01-01', end='2023-12-31', interval='1d')
 # Train PPO
 env = TradingEnv(data)
 check_env(env, warn=True)
-ppo_model = PPO("MlpPolicy", env, verbose=1)
-ppo_model.learn(total_timesteps=10000)
+ppo_model = PPO("MlpPolicy", env, verbose=1, device="cuda")
+ppo_model.learn(total_timesteps=100000)
 
 # Train A2C
-a2c_model = A2C("MlpPolicy", env, verbose=1)
-a2c_model.learn(total_timesteps=10000)
+a2c_model = A2C("MlpPolicy", env, verbose=1, learning_rate=0.05, device="cuda", gamma=0.95)
+a2c_model.learn(total_timesteps=100000)
 
 # Train SAC (requires continuous action space)
 env_continuous = TradingEnv(data, use_continuous=True)
-sac_model = SAC("MlpPolicy", env_continuous, verbose=1)
-sac_model.learn(total_timesteps=10000)
+sac_model = SAC("MlpPolicy", env_continuous, verbose=1, device="cuda")
+sac_model.learn(total_timesteps=100000)
 
 
 
